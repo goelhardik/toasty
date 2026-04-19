@@ -334,7 +334,27 @@ Write-Host ("=" * 40)
 
 $copilotRepoRoot = Join-Path ([System.IO.Path]::GetTempPath()) "toasty-copilot-test-$(Get-Random)"
 $cwdEsc = $copilotRepoRoot.Replace('\', '\\')
-$folderName = Split-Path -Leaf $copilotRepoRoot
+
+# Mirror C++ folder_name_of: full path, %USERPROFILE% collapsed to "~", and
+# trailing separators stripped (except for the root).
+function Get-DisplayPath([string]$p) {
+    while ($p.Length -gt 3 -and ($p[$p.Length-1] -eq '\' -or $p[$p.Length-1] -eq '/')) {
+        $p = $p.Substring(0, $p.Length-1)
+    }
+    $userHome = $env:USERPROFILE
+    if ($userHome) {
+        while ($userHome.Length -gt 0 -and ($userHome[$userHome.Length-1] -eq '\' -or $userHome[$userHome.Length-1] -eq '/')) {
+            $userHome = $userHome.Substring(0, $userHome.Length-1)
+        }
+        if ($userHome.Length -gt 0 -and $p.Length -ge $userHome.Length -and
+            $p.Substring(0, $userHome.Length).Equals($userHome, [StringComparison]::OrdinalIgnoreCase) -and
+            ($p.Length -eq $userHome.Length -or $p[$userHome.Length] -eq '\' -or $p[$userHome.Length] -eq '/')) {
+            $p = '~' + $p.Substring($userHome.Length)
+        }
+    }
+    return $p
+}
+$folderName = Get-DisplayPath $copilotRepoRoot
 
 # end with no stdin (manual invocation) must not hang and must show fallback
 $r = Run-Toasty @("--copilot-hook", "end", "--dry-run")
@@ -356,7 +376,8 @@ $payload = '{"timestamp":1700000000000,"cwd":"' + $cwdEsc + '","reason":"timeout
 $r = Run-Toasty -Arguments @("--copilot-hook", "end", "--dry-run") -StdinInput $payload
 if ((Assert-ExitCode "hook end timeout exits 0" 0 $r.ExitCode) -and
     (Assert-OutputContains "hook end timeout title" $r.Stdout "GitHub Copilot - timed out") -and
-    (Assert-OutputContains "hook end timeout message" $r.Stdout "Timed out - $folderName")) {
+    (Assert-OutputContains "hook end timeout message" $r.Stdout "Message: Timed out") -and
+    (Assert-OutputContains "hook end timeout subtitle" $r.Stdout "Subtitle: $folderName")) {
     Pass "copilot-hook end with timeout reason"
 }
 
@@ -364,7 +385,8 @@ if ((Assert-ExitCode "hook end timeout exits 0" 0 $r.ExitCode) -and
 $payload = '{"timestamp":1700000000000,"cwd":"' + $cwdEsc + '","reason":"error"}'
 $r = Run-Toasty -Arguments @("--copilot-hook", "end", "--dry-run") -StdinInput $payload
 if ((Assert-OutputContains "hook end error title" $r.Stdout "GitHub Copilot - failed") -and
-    (Assert-OutputContains "hook end error message" $r.Stdout "Failed - $folderName")) {
+    (Assert-OutputContains "hook end error message" $r.Stdout "Message: Failed") -and
+    (Assert-OutputContains "hook end error subtitle" $r.Stdout "Subtitle: $folderName")) {
     Pass "copilot-hook end with error reason"
 }
 
@@ -372,7 +394,8 @@ if ((Assert-OutputContains "hook end error title" $r.Stdout "GitHub Copilot - fa
 $payload = '{"timestamp":1700000000000,"cwd":"' + $cwdEsc + '","reason":"user_exit"}'
 $r = Run-Toasty -Arguments @("--copilot-hook", "end", "--dry-run") -StdinInput $payload
 if ((Assert-OutputContains "hook end user_exit title" $r.Stdout "GitHub Copilot - session ended") -and
-    (Assert-OutputContains "hook end user_exit message" $r.Stdout "Session ended - $folderName")) {
+    (Assert-OutputContains "hook end user_exit message" $r.Stdout "Message: Session ended") -and
+    (Assert-OutputContains "hook end user_exit subtitle" $r.Stdout "Subtitle: $folderName")) {
     Pass "copilot-hook end with user_exit reason"
 }
 
@@ -388,7 +411,7 @@ if ((Assert-ExitCode "hook prompt exits 0" 0 $r.ExitCode) -and
 # interference from other test cases.
 $rtCwd = Join-Path ([System.IO.Path]::GetTempPath()) "toasty-rt-$(Get-Random)"
 $rtCwdEsc = $rtCwd.Replace('\', '\\')
-$rtFolder = Split-Path -Leaf $rtCwd
+$rtFolder = Get-DisplayPath $rtCwd
 $promptPayload = '{"timestamp":1700000000000,"cwd":"' + $rtCwdEsc + '","prompt":"Refactor the auth module"}'
 $endPayload = '{"timestamp":1700000001000,"cwd":"' + $rtCwdEsc + '","reason":"complete"}'
 Run-Toasty -Arguments @("--copilot-hook", "prompt") -StdinInput $promptPayload | Out-Null
@@ -396,13 +419,14 @@ $r = Run-Toasty -Arguments @("--copilot-hook", "end", "--dry-run") -StdinInput $
 if ((Assert-ExitCode "hook roundtrip exits 0" 0 $r.ExitCode) -and
     (Assert-OutputContains "hook roundtrip title" $r.Stdout "Title: GitHub Copilot") -and
     (Assert-OutputContains "hook roundtrip prompt in msg" $r.Stdout "Refactor the auth module") -and
-    (Assert-OutputContains "hook roundtrip folder in msg" $r.Stdout $rtFolder)) {
+    (Assert-OutputContains "hook roundtrip folder in subtitle" $r.Stdout "Subtitle: $rtFolder")) {
     Pass "copilot-hook prompt -> end round trip"
 }
 
 # Subsequent end with same cwd (cache consumed) falls back to generic message
 $r = Run-Toasty -Arguments @("--copilot-hook", "end", "--dry-run") -StdinInput $endPayload
-if (Assert-OutputContains "hook cache consumed" $r.Stdout "Message: Finished - $rtFolder") {
+if ((Assert-OutputContains "hook cache consumed message" $r.Stdout "Message: Finished") -and
+    (Assert-OutputContains "hook cache consumed subtitle" $r.Stdout "Subtitle: $rtFolder")) {
     Pass "copilot-hook prompt cache consumed after end"
 }
 

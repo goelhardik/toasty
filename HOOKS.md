@@ -207,9 +207,10 @@ where it reads the JSON Copilot pipes to stdin and builds a richer toast:
 - The user prompt is captured on `userPromptSubmitted` and cached per-cwd
   under `%LOCALAPPDATA%\toasty\copilot-prompts\`.
 - `sessionEnd` reads `reason` + `cwd` from stdin, looks up the cached prompt,
-  and shows e.g. `GitHub Copilot — "Refactor the auth module" - myrepo`. The
-  title varies by `reason` (`complete`, `timeout`, `error`, `abort`,
-  `user_exit`).
+  and shows a 3-line toast: title (`GitHub Copilot - <session>`), message
+  (`"Refactor the auth module"`), and a third subtitle line with the folder
+  (`myrepo`). The title varies by `reason` (`complete`, `timeout`, `error`,
+  `abort`, `user_exit`).
 - `postToolUse` arms a debounced **idle watchdog**: every tool call refreshes
   a timer; when no new tool fires for `TOASTY_COPILOT_IDLE_SEC` seconds
   (default 6), a detached watchdog process emits a `GitHub Copilot - ready`

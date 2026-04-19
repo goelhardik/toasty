@@ -298,6 +298,7 @@ void print_usage() {
                << L"  toasty --status\n\n"
                << L"Options:\n"
                << L"  -t, --title <text>   Set notification title (default: \"Notification\")\n"
+               << L"  --subtitle <text>    Optional 3rd line below the message body (e.g. folder name)\n"
                << L"  --app <name>         Use AI CLI preset (claude, copilot, gemini, codex, cursor)\n"
                << L"  -i, --icon <path>    Custom icon path (PNG recommended, 48x48px)\n"
                << L"  -v, --version        Show version and exit\n"
@@ -1493,20 +1494,19 @@ int run_copilot_watchdog(const std::wstring& hash) {
     std::wstring shortPrompt = truncate_w(stripQuotes(normalize_ws(toFire.prompt)), 80);
     std::wstring title = L"GitHub Copilot - ready";
     if (!sessionName.empty()) title = L"GitHub Copilot - " + sessionName + L" (ready)";
-    std::wstring message;
-    if (!shortPrompt.empty()) {
-        message = L"\"" + shortPrompt + L"\"";
-        if (!folder.empty()) message += L" - " + folder;
-    } else {
-        message = folder.empty() ? L"Awaiting input" : (L"Awaiting input - " + folder);
-    }
+    std::wstring message = shortPrompt.empty() ? std::wstring(L"Awaiting input")
+                                               : (L"\"" + shortPrompt + L"\"");
     // Final safety cap on total body length.
     message = truncate_w(message, 140);
     title   = truncate_w(title, 100);
+    std::wstring subtitle = truncate_w(stripQuotes(folder), 100);
 
     std::wstring exe = get_exe_path();
     if (!exe.empty()) {
         std::wstring cmd = L"\"" + exe + L"\" --app copilot --title \"" + title + L"\" \"" + message + L"\"";
+        if (!subtitle.empty()) {
+            cmd += L" --subtitle \"" + subtitle + L"\"";
+        }
         if (toFire.hwnd != 0) {
             cmd += L" --launch-hwnd " + std::to_wstring(toFire.hwnd);
         }
@@ -1828,17 +1828,35 @@ std::wstring humanize_reason(const std::wstring& reason) {
     return reason;
 }
 
+// Render a cwd for display in toast notifications. Returns the full path,
+// with %USERPROFILE% collapsed to "~" for brevity.
 std::wstring folder_name_of(const std::wstring& cwd) {
     if (cwd.empty()) return L"";
-    fs::path p(cwd);
-    std::wstring name = p.filename().wstring();
-    if (name.empty()) name = p.root_name().wstring();
-    return name;
+    std::wstring path = cwd;
+    // Strip trailing separators (except the root, e.g. keep "C:\").
+    while (path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) {
+        path.pop_back();
+    }
+    wchar_t homeBuf[MAX_PATH] = {};
+    DWORD n = GetEnvironmentVariableW(L"USERPROFILE", homeBuf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        std::wstring home = homeBuf;
+        while (!home.empty() && (home.back() == L'\\' || home.back() == L'/')) {
+            home.pop_back();
+        }
+        if (!home.empty() && path.size() >= home.size() &&
+            _wcsnicmp(path.c_str(), home.c_str(), home.size()) == 0 &&
+            (path.size() == home.size() || path[home.size()] == L'\\' || path[home.size()] == L'/')) {
+            path = L"~" + path.substr(home.size());
+        }
+    }
+    return path;
 }
 
 struct CopilotEndContent {
     std::wstring title;
     std::wstring message;
+    std::wstring subtitle;  // Rendered as a 3rd <text> line (typically the folder).
 };
 
 CopilotEndContent build_copilot_end_content(const std::wstring& cwd,
@@ -1870,17 +1888,17 @@ CopilotEndContent build_copilot_end_content(const std::wstring& cwd,
     std::wstring shortPrompt = truncate_w(normalize_ws(prompt), 80);
     if (!shortPrompt.empty()) {
         c.message = L"\"" + shortPrompt + L"\"";
-        if (!folder.empty()) c.message += L" - " + folder;
     } else {
         std::wstring lead = ok ? L"Finished" : (human.empty() ? L"Ended" : human);
         if (!lead.empty() && lead[0] >= L'a' && lead[0] <= L'z')
             lead[0] = (wchar_t)(lead[0] - 32);
         c.message = lead;
-        if (!folder.empty()) c.message += L" - " + folder;
     }
+    c.subtitle = folder;
     // Cap total lengths defensively (sessionName/prompt are unbounded).
-    c.title   = truncate_w(c.title, 100);
-    c.message = truncate_w(c.message, 140);
+    c.title    = truncate_w(c.title, 100);
+    c.message  = truncate_w(c.message, 140);
+    c.subtitle = truncate_w(c.subtitle, 100);
     return c;
 }
 
@@ -1888,6 +1906,7 @@ struct CopilotHookResult {
     bool shouldToast = false;
     std::wstring title;
     std::wstring message;
+    std::wstring subtitle;
 };
 
 // Process a Copilot hook event. event must be "prompt" or "end".
@@ -1974,6 +1993,7 @@ CopilotHookResult handle_copilot_hook(const std::wstring& event) {
     r.shouldToast = true;
     r.title = content.title;
     r.message = content.message;
+    r.subtitle = content.subtitle;
     return r;
 }
 
@@ -2652,6 +2672,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     std::wstring message;
     std::wstring title = L"Notification";
+    std::wstring subtitle;
     std::wstring iconPath;
     bool doInstall = false;
     bool doUninstall = false;
@@ -2743,6 +2764,14 @@ int wmain(int argc, wchar_t* argv[]) {
                 explicitTitle = true;
             } else {
                 std::wcerr << L"Error: --title requires an argument\n";
+                return 1;
+            }
+        }
+        else if (arg == L"--subtitle") {
+            if (i + 1 < argc) {
+                subtitle = argv[++i];
+            } else {
+                std::wcerr << L"Error: --subtitle requires an argument\n";
                 return 1;
             }
         }
@@ -2929,6 +2958,7 @@ int wmain(int argc, wchar_t* argv[]) {
         }
         message = res.message;
         title = res.title;
+        if (subtitle.empty()) subtitle = res.subtitle;
         explicitTitle = true;
         // Use the copilot icon for the toast.
         const AppPreset* p = find_preset(L"copilot");
@@ -3001,12 +3031,18 @@ int wmain(int argc, wchar_t* argv[]) {
         }
         
         xml += L"<text>" + escape_xml(title) + L"</text>"
-               L"<text>" + escape_xml(message) + L"</text>"
-               L"</binding></visual></toast>";
+               L"<text>" + escape_xml(message) + L"</text>";
+        if (!subtitle.empty()) {
+            xml += L"<text>" + escape_xml(subtitle) + L"</text>";
+        }
+        xml += L"</binding></visual></toast>";
 
         if (g_dryRun) {
             std::wcout << L"[dry-run] Title: " << title << L"\n";
             std::wcout << L"[dry-run] Message: " << message << L"\n";
+            if (!subtitle.empty()) {
+                std::wcout << L"[dry-run] Subtitle: " << subtitle << L"\n";
+            }
             std::wcout << L"[dry-run] Icon: " << (iconPath.empty() ? L"(none)" : iconPath) << L"\n";
             std::wcout << L"[dry-run] Toast XML:\n" << xml << L"\n";
 

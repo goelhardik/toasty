@@ -207,7 +207,9 @@ workaround, toasty installs a `postToolUse` hook that arms a debounced **idle
 watchdog**: every tool call refreshes a "fire toast in N seconds" timer. If
 Copilot stops calling tools for N seconds, you get a toast like:
 
-> *GitHub Copilot - my-cool-session (ready) - "Refactor the auth module" - myrepo*
+> *GitHub Copilot - my-cool-session (ready)*  
+> *"Refactor the auth module"*  
+> *myrepo*
 
 Tunable via `TOASTY_COPILOT_IDLE_SEC` (default 6 seconds, range 1-3600).
 The watchdog auto-cancels when you submit your next prompt or exit the
@@ -240,7 +242,7 @@ The `--copilot-hook` modes read the JSON payload Copilot pipes to
 stdin (`cwd`, `reason`, `prompt`, `sessionId`), so the toast that fires at
 session end shows your task and folder, e.g.:
 
-- *GitHub Copilot - my-cool-session — "Refactor the auth module" - myrepo*
+- *GitHub Copilot - my-cool-session* / *"Refactor the auth module"* / *myrepo*  (3-line toast: title, prompt, folder)
 - *GitHub Copilot - my-cool-session (timed out)*
 - *GitHub Copilot - failed* (when no `sessionId` present)
 
