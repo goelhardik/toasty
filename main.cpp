@@ -1504,9 +1504,39 @@ int run_copilot_watchdog(const std::wstring& hash) {
 
     std::wstring exe = get_exe_path();
     if (!exe.empty()) {
-        std::wstring cmd = L"\"" + exe + L"\" --app copilot --title \"" + title + L"\" \"" + message + L"\"";
+        // Escape an arbitrary string for embedding inside a "..."-quoted
+        // command-line argument as parsed by CommandLineToArgvW. We just
+        // need to handle embedded double quotes (escape as \") and any
+        // backslashes that immediately precede a quote (double them).
+        // stripQuotes above maps " -> ', so in practice this should be a
+        // no-op for our inputs, but we apply it defensively.
+        auto cmdEscape = [](const std::wstring& in) {
+            std::wstring out;
+            out.reserve(in.size());
+            size_t backslashes = 0;
+            for (wchar_t c : in) {
+                if (c == L'\\') {
+                    out.push_back(c);
+                    backslashes++;
+                } else if (c == L'"') {
+                    // Double any preceding backslashes, then escape the quote.
+                    out.append(backslashes, L'\\');
+                    out.push_back(L'\\');
+                    out.push_back(L'"');
+                    backslashes = 0;
+                } else {
+                    out.push_back(c);
+                    backslashes = 0;
+                }
+            }
+            // Trailing backslashes before the closing quote we'll add must
+            // also be doubled.
+            out.append(backslashes, L'\\');
+            return out;
+        };
+        std::wstring cmd = L"\"" + exe + L"\" --app copilot --title \"" + cmdEscape(title) + L"\" \"" + cmdEscape(message) + L"\"";
         if (!subtitle.empty()) {
-            cmd += L" --subtitle \"" + subtitle + L"\"";
+            cmd += L" --subtitle \"" + cmdEscape(subtitle) + L"\"";
         }
         if (toFire.hwnd != 0) {
             cmd += L" --launch-hwnd " + std::to_wstring(toFire.hwnd);
