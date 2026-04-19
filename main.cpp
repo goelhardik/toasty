@@ -1216,6 +1216,7 @@ bool install_copilot_at(const std::wstring& exePath, const std::wstring& configP
         upsertHook(L"sessionEnd", buildHook(L"end"));
     }
     upsertHook(L"userPromptSubmitted", buildHook(L"prompt"));
+    upsertHook(L"preToolUse",  buildHook(L"tool-start"));
     upsertHook(L"postToolUse", buildHook(L"tool"));
 
     rootObj.SetNamedValue(L"hooks", hooksObj);
@@ -1318,7 +1319,7 @@ std::wstring copilot_lock_path_by_hash(const std::wstring& hash) {
     return dir + L"\\" + hash + L".lock";
 }
 
-// Idle threshold in seconds. Reads TOASTY_COPILOT_IDLE_SEC env var; default 6.
+// Idle threshold in seconds. Reads TOASTY_COPILOT_IDLE_SEC env var; default 15.
 unsigned copilot_idle_seconds() {
     wchar_t buf[32] = {};
     if (GetEnvironmentVariableW(L"TOASTY_COPILOT_IDLE_SEC", buf, 32) > 0) {
@@ -1326,7 +1327,7 @@ unsigned copilot_idle_seconds() {
         unsigned long v = wcstoul(buf, &end, 10);
         if (v >= 1 && v <= 3600) return (unsigned)v;
     }
-    return 6;
+    return 15;
 }
 
 uint64_t now_ms() {
@@ -1960,6 +1961,15 @@ CopilotHookResult handle_copilot_hook(const std::wstring& event) {
         return r; // shouldToast = false
     }
 
+    if (event == L"tool-start") {
+        // preToolUse: a tool is about to run. Cancel any pending idle toast
+        // for this cwd so the watchdog doesn't fire while Copilot is actively
+        // working. postToolUse will re-arm the timer when the tool finishes.
+        std::wstring cwd = getString(L"cwd");
+        if (!cwd.empty()) cancel_pending(cwd);
+        return r; // shouldToast = false
+    }
+
     if (event == L"tool") {
         // postToolUse: a tool just finished. Refresh the pending file's
         // fireMs to (now + idleSec*1000), snapshotting the latest cached
@@ -2385,11 +2395,12 @@ void handle_install(const std::wstring& agent, bool global, bool noSessionEnd) {
                 std::wcout << L"[dry-run] Hook command (sessionEnd): toasty --copilot-hook end\n";
             }
             std::wcout << L"[dry-run] Hook command (userPromptSubmitted): toasty --copilot-hook prompt\n";
+            std::wcout << L"[dry-run] Hook command (preToolUse): toasty --copilot-hook tool-start (pause watchdog)\n";
             std::wcout << L"[dry-run] Hook command (postToolUse): toasty --copilot-hook tool (idle watchdog)\n";
             if (noSessionEnd) {
-                std::wcout << L"[dry-run] Hook type: userPromptSubmitted, postToolUse (sessionEnd skipped via --no-session-end)\n";
+                std::wcout << L"[dry-run] Hook type: userPromptSubmitted, preToolUse, postToolUse (sessionEnd skipped via --no-session-end)\n";
             } else {
-                std::wcout << L"[dry-run] Hook type: sessionEnd, userPromptSubmitted, postToolUse\n";
+                std::wcout << L"[dry-run] Hook type: sessionEnd, userPromptSubmitted, preToolUse, postToolUse\n";
             }
             std::wcout << L"[dry-run] Hook scope: " << (global ? L"global (user-level)" : L"repo (per-project)") << L"\n";
             std::wcout << L"[dry-run] Idle threshold: " << copilot_idle_seconds() << L"s (TOASTY_COPILOT_IDLE_SEC)\n";
@@ -2442,8 +2453,8 @@ void handle_install(const std::wstring& agent, bool global, bool noSessionEnd) {
         bool ok = global ? install_copilot_global(exePath, noSessionEnd)
                          : install_copilot(exePath, noSessionEnd);
         const wchar_t* hookList = noSessionEnd
-            ? L"userPromptSubmitted + postToolUse hooks (sessionEnd skipped)"
-            : L"sessionEnd + userPromptSubmitted + postToolUse hooks";
+            ? L"userPromptSubmitted + preToolUse + postToolUse hooks (sessionEnd skipped)"
+            : L"sessionEnd + userPromptSubmitted + preToolUse + postToolUse hooks";
         if (ok) {
             if (global) {
                 std::wcout << L"  [x] GitHub Copilot: Added " << hookList << L" (global)\n";
@@ -2828,7 +2839,7 @@ int wmain(int argc, wchar_t* argv[]) {
             if (i + 1 < argc) {
                 copilotHookEvent = argv[++i];
             } else {
-                std::wcerr << L"Error: --copilot-hook requires an event name (prompt|end|tool)\n";
+                std::wcerr << L"Error: --copilot-hook requires an event name (prompt|end|tool|tool-start)\n";
                 return 1;
             }
         }

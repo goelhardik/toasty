@@ -200,9 +200,10 @@ Location: `.github/hooks/*.json` (per-repo) or `~/.copilot/hooks/*.json` (user-g
 
 ### Rich notifications via `--copilot-hook`
 
-`toasty --install copilot` installs three hooks (`sessionEnd`,
-`userPromptSubmitted`, and `postToolUse`) that invoke toasty in a special mode
-where it reads the JSON Copilot pipes to stdin and builds a richer toast:
+`toasty --install copilot` installs four hooks (`sessionEnd`,
+`userPromptSubmitted`, `preToolUse`, and `postToolUse`) that invoke toasty in
+a special mode where it reads the JSON Copilot pipes to stdin and builds a
+richer toast:
 
 - The user prompt is captured on `userPromptSubmitted` and cached per-cwd
   under `%LOCALAPPDATA%\toasty\copilot-prompts\`.
@@ -213,10 +214,13 @@ where it reads the JSON Copilot pipes to stdin and builds a richer toast:
   `abort`, `user_exit`).
 - `postToolUse` arms a debounced **idle watchdog**: every tool call refreshes
   a timer; when no new tool fires for `TOASTY_COPILOT_IDLE_SEC` seconds
-  (default 6), a detached watchdog process emits a `GitHub Copilot - ready`
+  (default 15), a detached watchdog process emits a `GitHub Copilot - ready`
   toast. This is the workaround for Copilot CLI not emitting any per-turn
   completion hook (see [issue #1128](https://github.com/github/copilot-cli/issues/1128)).
-  Submitting a new prompt or ending the session cancels the pending toast.
+- `preToolUse` cancels the pending watchdog the moment the next tool starts,
+  so a long-running tool (e.g. `sleep 60`) doesn't trigger a spurious "ready"
+  toast in the middle of active work. The next `postToolUse` re-arms it.
+  Submitting a new prompt or ending the session also cancels the pending toast.
 - The cache file is deleted after read, and stale entries (>24h) are swept on
   the next write.
 - If stdin is empty (e.g. you ran the command manually) toasty falls back to a
