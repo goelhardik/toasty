@@ -186,10 +186,10 @@ Add to `.github/hooks/toasty.json` (per-repo) **or** `~/.copilot/hooks/toasty.js
 }
 ```
 
-When installed via `toasty --install copilot`, three hooks are configured:
-`sessionEnd`, `userPromptSubmitted`, **and `postToolUse`** at the repo level
-(`.github/hooks/toasty.json`). Pass `--global` to install once for your entire
-user account (`~/.copilot/hooks/toasty.json`, which on Windows is
+When installed via `toasty --install copilot`, four hooks are configured:
+`sessionEnd`, `userPromptSubmitted`, `preToolUse`, **and `postToolUse`** at the
+repo level (`.github/hooks/toasty.json`). Pass `--global` to install once for
+your entire user account (`~/.copilot/hooks/toasty.json`, which on Windows is
 `%USERPROFILE%\.copilot\hooks\toasty.json`) so you get notifications regardless
 of which directory you launch Copilot CLI from. `toasty --uninstall` removes
 both locations.
@@ -204,17 +204,20 @@ installed `sessionEnd` entry; re-running without it restores it.
 Copilot CLI does **not** emit a hook when a single turn completes within an
 interactive session — `sessionEnd` only fires on `/exit` or Ctrl+C. As a
 workaround, toasty installs a `postToolUse` hook that arms a debounced **idle
-watchdog**: every tool call refreshes a "fire toast in N seconds" timer. If
-Copilot stops calling tools for N seconds, you get a toast like:
+watchdog**: every tool call refreshes a "fire toast in N seconds" timer. A
+companion `preToolUse` hook *cancels* the pending toast as soon as the next
+tool starts, so long-running tools (e.g. a 60s `sleep`) don't trigger spurious
+"ready" toasts in the middle of active work. If Copilot stops calling tools
+for N seconds *and* nothing else is in flight, you get a toast like:
 
 > *GitHub Copilot - my-cool-session (ready)*  
 > *"Refactor the auth module"*  
 > *myrepo*
 
-Tunable via `TOASTY_COPILOT_IDLE_SEC` (default 6 seconds, range 1-3600).
-The watchdog auto-cancels when you submit your next prompt or exit the
-session. Caveat: turns where Copilot replies without using any tool won't
-trigger it. Track upstream issue
+Tunable via `TOASTY_COPILOT_IDLE_SEC` (default 15 seconds, range 1-3600).
+The watchdog auto-cancels when you submit your next prompt, when the next
+tool starts, or when you exit the session. Caveat: turns where Copilot
+replies without using any tool won't trigger it. Track upstream issue
 [`github/copilot-cli#1128`](https://github.com/github/copilot-cli/issues/1128)
 for a proper `awaitingUserInput` hook.
 

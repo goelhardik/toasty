@@ -293,7 +293,9 @@ if ((Assert-ExitCode "install copilot exits 0" 0 $r.ExitCode) -and
     (Assert-OutputContains "install copilot end cmd" $r.Stdout "--copilot-hook end") -and
     (Assert-OutputContains "install copilot prompt cmd" $r.Stdout "--copilot-hook prompt") -and
     (Assert-OutputContains "install copilot tool cmd" $r.Stdout "--copilot-hook tool") -and
-    (Assert-OutputContains "install copilot postToolUse" $r.Stdout "postToolUse")) {
+    (Assert-OutputContains "install copilot tool-start cmd" $r.Stdout "--copilot-hook tool-start") -and
+    (Assert-OutputContains "install copilot postToolUse" $r.Stdout "postToolUse") -and
+    (Assert-OutputContains "install copilot preToolUse" $r.Stdout "preToolUse")) {
     Pass "install copilot --dry-run"
 }
 
@@ -476,6 +478,17 @@ try {
     if ($remaining.Count -eq 0) { Pass "prompt hook cancels pending watchdog" }
     else { $script:failed++; Write-Host "  FAIL: prompt hook left $($remaining.Count) pending file(s)" -ForegroundColor Red }
 
+    # A `tool-start` event (preToolUse) for the same cwd cancels the pending
+    # file so the watchdog doesn't fire while a long-running tool is in flight.
+    $r = Run-Toasty @("--copilot-hook", "tool") -StdinInput $stdin
+    $stdinStart = '{"timestamp":' + ($ts + 150) + ',"cwd":"' + ($wdCwd -replace '\\','\\') + '","toolName":"bash"}'
+    $r = Run-Toasty @("--copilot-hook", "tool-start") -StdinInput $stdinStart
+    $remaining = @(Get-ChildItem $pendingDir -Filter "*.json" -ErrorAction SilentlyContinue | Where-Object {
+        try { (Get-Content $_.FullName -Raw | ConvertFrom-Json).cwd -eq $wdCwd } catch { $false }
+    })
+    if ($remaining.Count -eq 0) { Pass "tool-start hook cancels pending watchdog" }
+    else { $script:failed++; Write-Host "  FAIL: tool-start hook left $($remaining.Count) pending file(s)" -ForegroundColor Red }
+
     # tool then end also cancels pending
     $r = Run-Toasty @("--copilot-hook", "tool") -StdinInput $stdin
     $stdin3 = '{"timestamp":' + ($ts + 200) + ',"cwd":"' + ($wdCwd -replace '\\','\\') + '","reason":"complete"}'
@@ -601,6 +614,7 @@ try {
     $seCount = @($cfg.hooks.sessionEnd).Count
     $upsCount = @($cfg.hooks.userPromptSubmitted).Count
     $ptuCount = @($cfg.hooks.postToolUse).Count
+    $pretuCount = @($cfg.hooks.preToolUse).Count
     if ($seCount -ne 1) {
         $script:failed++
         Write-Host "  FAIL: install idempotent sessionEnd count = $seCount, expected 1" -ForegroundColor Red
@@ -610,15 +624,21 @@ try {
     } elseif ($ptuCount -ne 1) {
         $script:failed++
         Write-Host "  FAIL: install idempotent postToolUse count = $ptuCount, expected 1" -ForegroundColor Red
+    } elseif ($pretuCount -ne 1) {
+        $script:failed++
+        Write-Host "  FAIL: install idempotent preToolUse count = $pretuCount, expected 1" -ForegroundColor Red
     } elseif ($cfg.hooks.sessionEnd[0].bash -notmatch '--copilot-hook end') {
         $script:failed++
         Write-Host "  FAIL: sessionEnd bash command wrong: $($cfg.hooks.sessionEnd[0].bash)" -ForegroundColor Red
     } elseif ($cfg.hooks.userPromptSubmitted[0].bash -notmatch '--copilot-hook prompt') {
         $script:failed++
         Write-Host "  FAIL: userPromptSubmitted bash command wrong" -ForegroundColor Red
-    } elseif ($cfg.hooks.postToolUse[0].bash -notmatch '--copilot-hook tool') {
+    } elseif ($cfg.hooks.postToolUse[0].bash -notmatch '--copilot-hook tool$|--copilot-hook tool ') {
         $script:failed++
         Write-Host "  FAIL: postToolUse bash command wrong: $($cfg.hooks.postToolUse[0].bash)" -ForegroundColor Red
+    } elseif ($cfg.hooks.preToolUse[0].bash -notmatch '--copilot-hook tool-start') {
+        $script:failed++
+        Write-Host "  FAIL: preToolUse bash command wrong: $($cfg.hooks.preToolUse[0].bash)" -ForegroundColor Red
     } else {
         Pass "install copilot is idempotent (real fs)"
     }
@@ -655,7 +675,7 @@ try {
     $globalCfg = Join-Path $tmpHome ".copilot\hooks\toasty.json"
 
     $r = Run-Toasty @("--install", "copilot", "--global") -Env @{ USERPROFILE = $tmpHome }
-    if (Assert-OutputContains "global install reports success" $r.Stdout "Added sessionEnd + userPromptSubmitted + postToolUse hooks (global)") { Pass "global install reports success" }
+    if (Assert-OutputContains "global install reports success" $r.Stdout "Added sessionEnd + userPromptSubmitted + preToolUse + postToolUse hooks (global)") { Pass "global install reports success" }
     if (Test-Path $globalCfg) { Pass "global install creates ~/.copilot/hooks/toasty.json" }
     else { $script:failed++; $script:errors += "FAIL: global install did not create file"; Write-Host "  FAIL: global install did not create file" -ForegroundColor Red }
 
@@ -694,7 +714,7 @@ if (Assert-OutputContains "help mentions --no-session-end" $r.Stdout "--no-sessi
 
 # --no-session-end skips sessionEnd: dry-run
 $r = Run-Toasty @("--install", "copilot", "--global", "--no-session-end", "--dry-run")
-if ((Assert-OutputContains "dry-run lists tool+prompt without sessionEnd" $r.Stdout "userPromptSubmitted, postToolUse") -and
+if ((Assert-OutputContains "dry-run lists tool+prompt without sessionEnd" $r.Stdout "userPromptSubmitted, preToolUse, postToolUse") -and
     (Assert-OutputNotContains "dry-run skips sessionEnd command" $r.Stdout "Hook command (sessionEnd)")) {
     Pass "--no-session-end dry-run skips sessionEnd"
 }
@@ -716,6 +736,7 @@ try {
         Write-Host "  FAIL: sessionEnd present despite --no-session-end" -ForegroundColor Red
     }
     if (@($cfg.hooks.userPromptSubmitted).Count -eq 1 -and
+        @($cfg.hooks.preToolUse).Count -eq 1 -and
         @($cfg.hooks.postToolUse).Count -eq 1) {
         Pass "--no-session-end keeps prompt + tool hooks"
     } else {
